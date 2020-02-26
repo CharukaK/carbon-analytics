@@ -1,14 +1,13 @@
 /**
  * Copyright (c) 2019, WSO2 Inc. (http://www.wso2.org)  Apache License, Version 2.0  http://www.apache.org/licenses/LICENSE-2.0
  */
-define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 'app/source-editor/completion-engine'],
-    function ($, _, log,Remarkable, Handlebars, DesignViewUtils, CompletionEngine) {
+define(['jquery', 'lodash', 'log', 'remarkable', 'handlebar', 'designViewUtils', 'constants', 'app/source-editor/completion-engine', 'alerts'],
+    function ($, _, log, Remarkable, Handlebars, DesignViewUtils, Constants, CompletionEngine, alerts) {
         /**
          * Load operators from the Completion engine.
          *
          * @param callback Callback function
          */
-
         var constants = {
             STORE: 'store',
             SINK: 'sink',
@@ -251,6 +250,7 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
             }
         };
 
+        var self;
         /**
          * Initializes the module.
          *
@@ -258,6 +258,7 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
          * @constructor
          */
         var OperatorFinder = function (options) {
+            self = this;
             this._options = options;
             this._application = options.application;
             this._activateBtn = $(options.activateBtn);
@@ -273,6 +274,13 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
                 searchResults: Handlebars.compile($('#operators-search-results-template').html()),
                 moreDetails: Handlebars.compile($('#operator-details-template').html())
             };
+            // Load installation statuses of all the extensions.
+            this.loadExtensionInstallationStatuses();
+            this._notInstalledExtensionArray = getNotInstalledExtensionDetails();
+            this._installedExtensionArray = getInstalledExtensionDetails();
+            this._partiallyInstalledExtensionArray = getPartiallyInstalledExtensionDetails();
+            // Register listener for changes in extension installation statuses.
+            this._application.utils.extensionStatusListener = this;
         };
 
         /**
@@ -305,8 +313,211 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
         };
 
         /**
-         * Searches operators using the given query.
+         * Loads extension installation statuses.
+         */
+        OperatorFinder.prototype.loadExtensionInstallationStatuses = function () {
+            var self = this;
+            var serviceUrl = self._application.config.services.extensionsInstallation.endpoint;
+            var getAllExtensionStatusesUrl = serviceUrl + "/status";
+            $.ajax({
+                type: "GET",
+                contentType: "json",
+                url: getAllExtensionStatusesUrl,
+                async: false,
+                success: function (data) {
+                    self._application.utils.extensionData = new Map(Object.entries(data));
+                },
+                error: function (e) {
+                    alerts.error("Unable to read extension statuses." +
+                        "Please see the editor console for further information.")
+                    throw "Unable to read extension statuses";
+                }
+            });
+        };
+
+        /**
+         * Re-arranges extension objects, based on an extension's updated installation status.
          *
+         * @param extension     Extension object.
+         * @param updatedStatus Updated installation status of the given extension object.
+         */
+        OperatorFinder.prototype.reArrangeExtensions = function (extension, updatedStatus) {
+            this._application.utils.extensionData.set(extension.extensionInfo.name, extension);
+            var currentArray = this.getCurrentArray(extension);
+            var targetArray = this.getExtensionArrayFromInstallationStatus(updatedStatus);
+            self.moveInstallationUpdatedExtension(extension, currentArray, targetArray);
+            extension.extensionStatus = updatedStatus;
+            // Re-render only if the operator-finder is open.
+            if (this._operators) {
+                self.renderSearchResults($('#operator-search-input-field').get(0).value);
+            }
+        };
+
+        /**
+         * Returns the array in which, the given extension exists.
+         *
+         * @param extension Extension object.
+         * @returns {Array} The array in which, the given extension exists.
+         */
+        OperatorFinder.prototype.getCurrentArray = function (extension) {
+            var filteredExtensions;
+            filteredExtensions = _.filter(
+                this._installedExtensionArray,
+                function (ext) {
+                    return ext.extensionInfo.name === extension.extensionInfo.name
+                });
+            if (filteredExtensions.length > 0) {
+                return this._installedExtensionArray;
+            }
+            filteredExtensions = _.filter(
+                this._partiallyInstalledExtensionArray,
+                function (ext) {
+                    return ext.extensionInfo.name === extension.extensionInfo.name
+                });
+            if (filteredExtensions.length > 0) {
+                return this._partiallyInstalledExtensionArray;
+            }
+            return this._notInstalledExtensionArray;
+        };
+
+        /**
+         * Returns the array of an extension, based on the given status.
+         *
+         * @param status    Installation status of an extension.
+         * @returns {Array} The array, which contains extensions that have the given installation status.
+         */
+        OperatorFinder.prototype.getExtensionArrayFromInstallationStatus = function (status) {
+            switch (status) {
+                case Constants.EXTENSION_INSTALLED:
+                case Constants.EXTENSION_NOT_UNINSTALLED:
+                    return this._installedExtensionArray;
+                case Constants.EXTENSION_PARTIALLY_INSTALLED:
+                case Constants.EXTENSION_PARTIALLY_UNINSTALLED:
+                    return this._partiallyInstalledExtensionArray;
+                case Constants.EXTENSION_NOT_INSTALLED:
+                case Constants.EXTENSION_UNINSTALLED:
+                    return this._notInstalledExtensionArray;
+            }
+        };
+
+        /**
+         * Moves the given extension from the given current array to the given target array.
+         *
+         * @param extension     Extension object to be moved.
+         * @param currentArray  Current array of the extension object.
+         * @param targetArray   Destination array for the extension object.
+         */
+        OperatorFinder.prototype.moveInstallationUpdatedExtension = function (extension, currentArray, targetArray) {
+            var index = currentArray.indexOf(extension);
+            if (index > -1) {
+                currentArray.splice(index, 1);
+                targetArray.push(extension);
+            }
+        };
+
+        /**
+         * functions to get the not installed extension array details.
+         */
+        var getNotInstalledExtensionDetails = function () {
+            var notInstalledExtension = [];
+            self._application.utils.extensionData.forEach(function (extension) {
+                if (extension.extensionStatus.trim().toUpperCase() === Constants.EXTENSION_NOT_INSTALLED) {
+                    notInstalledExtension.push(extension);
+                }
+            });
+            return notInstalledExtension;
+        };
+        /**
+         *get the partial install extension details.
+         * @returns {[array]}
+         */
+        var getPartiallyInstalledExtensionDetails = function () {
+            var partiallyInstalledExtension = [];
+            self._application.utils.extensionData.forEach(function (extension) {
+                if (extension.extensionStatus.trim().toUpperCase() === Constants.EXTENSION_PARTIALLY_INSTALLED) {
+                    partiallyInstalledExtension.push(extension);
+                }
+            });
+            return partiallyInstalledExtension;
+        };
+        /**
+         *get the Installed extension details
+         * @returns {*}
+         */
+        var getInstalledExtensionDetails = function () {
+            var installedExtension = [];
+            self._application.utils.extensionData.forEach(function (extension) {
+                if (extension.extensionStatus.trim().toUpperCase() === Constants.EXTENSION_INSTALLED) {
+                    installedExtension.push(extension);
+                }
+            });
+            return installedExtension;
+        };
+
+        /**
+         * get the partial intall extension object.
+         * @param operatorExtension
+         * @returns {Array}
+         */
+        var getPartiallyInstalledExtensionObject = function (operatorExtension) {
+            for (var extension of self._partiallyInstalledExtensionArray) {
+                if (((operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return extension;}
+            }
+        };
+        /**
+         * get the installed extension object
+         * @param operatorExtension
+         */
+        var getInstalledExtensionObject = function (operatorExtension) {
+            for (var extension of self._installedExtensionArray) {
+                if (((operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return extension;}
+            }
+        };
+        /**
+         * get the not-installed extension object based on extension name.
+         * @param operatorExtensionName
+         * @returns {extension Object}
+         */
+        var getNotInstalledExtensionObject = function (operatorExtension) {
+            for (var extension of self._notInstalledExtensionArray) {
+                if (((operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return extension;}
+            }
+        };
+        /**
+         * check the whether operator extension is installed or not.
+         * @param operatorExtensionName
+         * return true/false.
+         */
+        var isNotInstalledExtension = function (operatorExtension) {
+            for (var extension of self._notInstalledExtensionArray) {
+                if (((operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return true;}
+            }
+        };
+
+        /**
+         * check the whether operator extension is partially installed or not.
+         * @param operatorExtension
+         * @returns {boolean}
+         */
+        var isPartialInstalledExtension = function (operatorExtension) {
+            for (var extension of self._partiallyInstalledExtensionArray) {
+                if ( ( (operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return true;}
+            }
+        };
+        /**
+         * check the whether operator extension  installed or not.
+         * @param operatorExtension
+         * @returns {boolean}
+         */
+        var isInstalledExtension = function (operatorExtension) {
+            var installedExtensionArray = getInstalledExtensionDetails();
+            for (var extension of installedExtensionArray) {
+                if (((operatorExtension.name.trim().toLowerCase()).indexOf(extension.extensionInfo.name.trim().toLowerCase())) > -1) {return true;}
+            }
+        };
+
+        /**
+         * Searches operators using the given query.
          * @param query String query
          * @returns {{results: Array, hasResults: boolean, hasQuery: boolean, namespaces: *}} Search results
          */
@@ -320,27 +531,91 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
                 });
             }
             var keyResult = [], descriptionResult = [], combineResults;
-            this._operators.forEach(function (e, i) {
+            this._operators.forEach(function (operatorExtension, i) {
                 var result = {
-                    fqn: hasToken(e.fqn, tokens),
-                    description: hasToken(e.description, tokens)
+                    fqn: hasToken(operatorExtension.fqn, tokens),
+                    description: hasToken(operatorExtension.description, tokens)
                 };
                 if (result.fqn.status) {
-                    keyResult.push({
-                        fqn: e.fqn,
-                        htmlFqn: result.fqn.text,
-                        type: e.type,
-                        description: result.description.text,
-                        index: i
-                    });
+                    if (isNotInstalledExtension(operatorExtension)) {
+                        keyResult.push({
+                            extension: getNotInstalledExtensionObject(operatorExtension),
+                            notInstall: Constants.EXTENSION_NOT_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    } else if (isPartialInstalledExtension(operatorExtension)) {
+                        keyResult.push({
+                            extension: getPartiallyInstalledExtensionObject(operatorExtension),
+                            partialInstall: Constants.EXTENSION_PARTIALLY_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    } else if (isInstalledExtension(operatorExtension)) {
+                        keyResult.push({
+                            extension: getInstalledExtensionObject(operatorExtension),
+                            install: Constants.EXTENSION_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    }else {
+                        keyResult.push({
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    }
                 } else if (result.description.status) {
-                    descriptionResult.push({
-                        fqn: e.fqn,
-                        htmlFqn: result.fqn.text,
-                        type: e.type,
-                        description: result.description.text,
-                        index: i
-                    });
+                    if (isNotInstalledExtension(operatorExtension)) {
+                        descriptionResult.push({
+                            extension: getNotInstalledExtensionObject(operatorExtension),
+                            notInstall: Constants.EXTENSION_NOT_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    } else if (isPartialInstalledExtension(operatorExtension)) {
+                        descriptionResult.push({
+                            extension: getPartiallyInstalledExtensionObject(operatorExtension),
+                            partialInstall: Constants.EXTENSION_PARTIALLY_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    } else if (isInstalledExtension(operatorExtension)) {
+                        descriptionResult.push({
+                            extension: getInstalledExtensionObject(operatorExtension),
+                            install: Constants.EXTENSION_INSTALLED,
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    }else {
+                        descriptionResult.push({
+                            fqn: operatorExtension.fqn,
+                            htmlFqn: result.fqn.text,
+                            type: operatorExtension.type,
+                            description: result.description.text,
+                            index: i
+                        });
+                    }
                 }
             });
             combineResults = keyResult.concat(descriptionResult);
@@ -398,6 +673,17 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
                 container.find('.copyable-text').val(syntax).select();
                 document.execCommand('copy');
             }
+        };
+
+        /**
+         * Updates the given button as 'loading', during an extension's installation.
+         *
+         * @param button    Install/Un-install button.
+         */
+        OperatorFinder.prototype.handleExtensionInstallationInProgress = function (button) {
+            button.empty();
+            button.addClass('fw-loader5');
+            button.addClass('fw-spin');
         };
 
         /**
@@ -461,6 +747,95 @@ define(['jquery', 'lodash', 'log','remarkable', 'handlebar', 'designViewUtils', 
                 $('#operator-search-input-field').val(query);
                 self.renderSearchResults(query);
             });
+
+            // Event handler for extension installation.
+            resultContent.on('click', 'a.extension-install-btn', function (e) {
+                var innerSelf = this;
+                e.preventDefault();
+                var handleCallback = function (extension, updatedStatus) {
+                    self.reArrangeExtensions(extension, updatedStatus);
+                };
+                var extensionObject = getNotInstalledExtensionObject({name: $(this).data('extension-name')});
+                self._application.utils.installOrUnInstallExtension(
+                    extensionObject,
+                    self._application,
+                    self.handleExtensionInstallationInProgress,
+                    handleCallback,
+                    $(this),
+                    Constants.INSTALL,
+                    innerSelf);
+            });
+
+            // Event handler for extension un-installation.
+            resultContent.on('click', 'a.extension-un-install-btn', function (e) {
+                var innerSelf = this;
+                e.preventDefault();
+                var handleCallback = function (extension, updatedStatus) {
+                    self.reArrangeExtensions(extension, updatedStatus);
+                };
+                var extensionObject = getInstalledExtensionObject({name: $(this).data('extension-name')});
+                self._application.utils.installOrUnInstallExtension(
+                    extensionObject,
+                    self._application,
+                    self.handleExtensionInstallationInProgress,
+                    handleCallback,
+                    $(this),
+                    Constants.UNINSTALL,
+                    innerSelf);
+            });
+
+            // Event handler for partially installed extension.
+            resultContent.on('click', 'a.partial-extension-install-btn', function (e) {
+                e.preventDefault();
+                var extensionName = {name: $(this).data('extension-names')};
+                var extension = getPartiallyInstalledExtensionObject(extensionName);
+                self._partialModel = $(
+                    '<div class="modal fade" id="' + extension.extensionInfo.name + '">' +
+                    '<div class="modal-dialog">' +
+                    '<div class="modal-content">' +
+                    '<div class="modal-header">' +
+                    "<button type='button' class='close' data-dismiss='modal' aria-label='Close'>" +
+                    "<i class=\"fw fw-cancel  about-dialog-close\"></i>" +
+                    "</button>" +
+                    '<h2 class="modal-title file-dialog-title" id="partialExtenName">'
+                    + extension.extensionInfo.name +
+                    '</h2>' +
+                    '<hr class="style1">' +
+                    '</div>' +
+                    '<div id="modalBodyId" class="modal-body">' +
+                    '</div>' +
+                    '<div class="modal-footer">' +
+                    '<button type="button" class="btn btn-default" data-dismiss="modal">Close</button>' +
+                    '</div>' +
+                    '</div>' +
+                    '</div>' +
+                    '</div>');
+
+                var modalBody = self._partialModel.find("div").filter("#modalBodyId");
+
+                if (extension.manuallyInstall) {
+                    modalBody.append($('<div style="text-align:justify">' +
+                        'The following dependencies should be manually installed.</div>'));
+                    extension.manuallyInstall.forEach(function (dependency) {
+                        var instructions = dependency.download.instructions ?
+                            (`<h4>Instructions</h4><div id="partialExtenDescription" style = "text-align:justify">` +
+                                `${dependency.download.instructions}</div>`) :
+                            ('<div id="partialExtenDescription" style="text-align:justify">' +
+                                'No instructions found.</div>');
+                        var usages = (`<h4>Installation Locations</h4>` +
+                            `<div id="partialExtenDescription" style = "text-align:justify">` +
+                            `<ol>${dependency.usages.map(usage => 
+                                    `<li>${usage.type.toLowerCase()} in ${usage.usedBy.toLowerCase()}</li>`
+                                )}</ol></div>`);
+
+                        modalBody.append($(`<h3>${dependency.name}</h3>` +
+                            `<div style="padding-left:10px">${instructions}<br/>${usages}</div>`));
+                    });
+                }
+                self._partialModel.modal('show');
+
+                }
+            );
 
             resultContent.on('click', 'a.more-info', function (e) {
                 e.preventDefault();

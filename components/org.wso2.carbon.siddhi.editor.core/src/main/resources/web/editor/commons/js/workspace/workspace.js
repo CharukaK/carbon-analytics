@@ -528,6 +528,14 @@ define(['ace/ace', 'jquery', 'lodash', 'log','dialogs','./service-client','welco
                 this._handleDeploy.show();
             };
 
+            this.handleGenerateStreamDialog = function handleGenerateStreamDialog(ref, callback) {
+                if (_.isNil(this._handleGenerateStreamDialog)) {
+                    this._handleGenerateStreamDialog = new Dialogs.generate_stream_dialog(app,ref, callback);
+                }
+                this._handleGenerateStreamDialog.render();
+                this._handleGenerateStreamDialog.show();
+            };
+
             this.handleExportForDocker = function handleExportForDocker() {
                 if (!_.isNil(this._handleExport)) {
                     this._handleExport.clear();
@@ -619,6 +627,14 @@ define(['ace/ace', 'jquery', 'lodash', 'log','dialogs','./service-client','welco
                 }
                 this._openSampleFileDialog.render();
                 this._openSampleFileDialog.show();
+            };
+
+            this.openExtensionInstallDialog = function openExtensionInstallDialog() {
+                if(_.isNil(this._ExtensionInstallDialog)){
+                    this._ExtensionInstallDialog = new Dialogs.ExtensionInstallDialog(app);
+                }
+                this._ExtensionInstallDialog.render();
+                this._ExtensionInstallDialog.show();
             };
 
             this.openQueryStore = function openQueryStore(options){
@@ -772,10 +788,15 @@ define(['ace/ace', 'jquery', 'lodash', 'log','dialogs','./service-client','welco
             app.commandManager.registerHandler('open-sample-file-open-dialog', this.openSampleFileOpenDialog, this);
             app.commandManager.registerHandler('query-store', this.openQueryStore, this);
 
+            //Open Extension install dialog
+            app.commandManager.registerHandler('extension-install-dialog', this.openExtensionInstallDialog , this);
+
             //Run hint tour
             app.commandManager.registerHandler('tour-guide', this.runGuide, this);
 
             app.commandManager.registerHandler('deploy-to-server', this.handleDeploy, this);
+
+            app.commandManager.registerHandler('generate-stream', this.handleGenerateStreamDialog, this);
 
             //Export Menu
             app.commandManager.registerHandler('export-for-docker', this.handleExportForDocker, this);

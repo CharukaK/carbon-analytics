@@ -112,7 +112,18 @@ define(function () {
         ASC:"asc",
         DESC: "desc",
         BATCH_WINDOW_PROCESSOR: "batch",
-        MULTI_VALUE: "..."
+        MULTI_VALUE: "...",
+        EXTENSION_INSTALLED: "INSTALLED",
+        EXTENSION_NOT_INSTALLED: "NOT_INSTALLED",
+        EXTENSION_PARTIALLY_INSTALLED: "PARTIALLY_INSTALLED",
+        EXTENSION_UNINSTALLED: "UNINSTALLED",
+        EXTENSION_NOT_UNINSTALLED: "NOT_UNINSTALLED",
+        EXTENSION_PARTIALLY_UNINSTALLED: "PARTIALLY_UNINSTALLED",
+        EXTENSION_INSTALLED_TEXT: "Installed",
+        EXTENSION_NOT_INSTALLED_TEXT: "Not-Installed",
+        EXTENSION_PARTIALLY_INSTALLED_TEXT: "Partially-Installed",
+        INSTALL: "Install",
+        UNINSTALL: "UnInstall"
     };
 
     return constants;
